@@ -1,0 +1,17 @@
+[package]
+name = "wasm-tracer-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# uprobe-bashreadline-common = { path = "../uprobe-bashreadline-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "wasm-tracer-ebpf"
+path = "src/main.rs"
