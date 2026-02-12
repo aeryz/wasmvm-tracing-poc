@@ -22,10 +22,15 @@
             mkdir -p $out/bin
             cp ${eunomia-pkgs.bpftool}/src/bpftool $out/bin
           '';
+          # this specific rust version is built on llvm 21, DO NOT blindly upgrade
+          # or ebpf compilation will break
           rust-toolchain = pkgs.rust-bin.nightly."2025-12-15".default.override {
             extensions = [
               "rust-src"
               "rust-analyzer"
+            ];
+            targets = [
+              "wasm32-unknown-unknown"
             ];
           };
 
@@ -65,6 +70,7 @@
         pkg-config
         binaryen # wasm tools
         bpf-linker
+        wasmtime # for 'wasmtime explore' command mostly
       ] ++ [
         bpftool
         rust-toolchain

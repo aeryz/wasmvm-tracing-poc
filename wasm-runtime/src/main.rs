@@ -1,14 +1,31 @@
 use std::{fs, process};
 
-use aya::programs::{
-    PerfEvent,
-    perf_event::{BreakpointConfig, PerfEventConfig, PerfEventScope, SamplePolicy},
+use aya::{
+    maps::RingBuf,
+    programs::{
+        PerfEvent,
+        perf_event::{BreakpointConfig, PerfEventConfig, PerfEventScope, SamplePolicy},
+    },
 };
 use log::{debug, warn};
 use tokio::signal;
-use wasmtime::{Config, Engine, Linker, Module, ProfilingStrategy, Store};
+use wasmtime::{
+    AsContextMut, Config, Engine, Linker, Memory, Module, ProfilingStrategy, Store,
+    StoreContextMut, TypedFunc,
+};
 
-fn find_perfmap_symbol(sym_suffix: &str) -> wasmtime::Result<Option<(u64, u64, String)>> {
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct FunctionCallEvent {
+    pub addr: u64,
+    pub len: u32,
+    pub data: [u8; 256],
+}
+
+fn find_perfmap_symbol(
+    bin_name: &str,
+    sym_suffix: &str,
+) -> wasmtime::Result<Option<(u64, u64, String)>> {
     let pid = process::id();
     println!("trying to read perf map output of PID {pid}");
     let data = fs::read_to_string(format!("/tmp/perf-{pid}.map"))?;
@@ -22,7 +39,7 @@ fn find_perfmap_symbol(sym_suffix: &str) -> wasmtime::Result<Option<(u64, u64, S
 
         if let (Some(addr), Some(size), Some(name)) = (addr, size, name) {
             println!("{} {} {}", addr, size, name);
-            if name.ends_with(sym_suffix) {
+            if name.starts_with(bin_name) && name.ends_with(sym_suffix) {
                 let addr = u64::from_str_radix(addr.trim_start_matches("0x"), 16)?;
                 let size = u64::from_str_radix(size, 16)?;
                 return Ok(Some((addr, size, name.to_string())));
@@ -32,6 +49,13 @@ fn find_perfmap_symbol(sym_suffix: &str) -> wasmtime::Result<Option<(u64, u64, S
     Ok(None)
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct Slice {
+    ptr: u32,
+    len: u32,
+}
+
 #[tokio::main]
 async fn main() -> wasmtime::Result<()> {
     env_logger::init();
@@ -39,76 +63,40 @@ async fn main() -> wasmtime::Result<()> {
     config.profiler(ProfilingStrategy::PerfMap);
     let engine = Engine::new(&config)?;
 
-    // Modules can be compiled through either the text or binary format
-    let wat = r#"
-    (module
-        (func $one_param (export "one_param") (param i32)
-            local.get 0
-            drop)
-        (func $two_params (export "two_params") (param i32 i64)
-            local.get 0
-            drop
-            local.get 1
-            drop)
-        (func $three_params (export "three_params") (param i64 i64 i64)
-            local.get 0
-            drop
-            local.get 1
-            drop
-            local.get 2
-            drop)
-        (func (export "hello")
-            i32.const 10
-            call $one_param
-            i32.const 100
-            i64.const 1000
-            call $two_params
-            i64.const 10000
-            i64.const 100000
-            i64.const 1000000
-            call $three_params
-            )
-        )
-    "#;
-    let module = Module::new(&engine, wat)?;
-    let wasm_bin = wat::parse_str(wat)?;
+    let module = Module::new(
+        &engine,
+        include_bytes!(
+            "/home/aeryz/dev/ebpf/wasmvm-tracing-poc/target/wasm32-unknown-unknown/release/wasm_binary.wasm"
+        ),
+    )?;
 
-    fs::write("./out.wasm", wasm_bin)?;
-
-    // // Host functionality can be arbitrary Rust functions and is provided
-    // // to guests through a `Linker`.
     let linker = Linker::new(&engine);
 
-    // linker.func_wrap(
-    //     "host",
-    //     "host_func",
-    //     |caller: Caller<'_, u32>, param: i32| {
-    //         println!("Got {} from WebAssembly", param);
-    //         println!("my host state is: {}", caller.data());
-    //     },
-    // )?;
-
-    // All wasm objects operate within the context of a "store". Each
-    // `Store` has a type parameter to store host-specific data, which in
-    // this case we're using `4` for.
     let mut store: Store<u32> = Store::new(&engine, 4);
 
-    // Instantiation of a module requires specifying its imports and then
-    // afterwards we can fetch exports by name, as well as asserting the
-    // type signature of the function with `get_typed_func`.
     let instance = linker.instantiate(&mut store, &module)?;
-    let hello = instance.get_typed_func::<(), ()>(&mut store, "hello")?;
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
 
-    // And finally we can call the wasm!
-    // hello.call(&mut store, ())?;
+    let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc")?;
+    // let dealloc = instance.get_typed_func::<(u32, u32), ()>(&mut store, "dealloc")?;
 
-    let Some((addr, size, name)) = find_perfmap_symbol("two_params")? else {
+    let entrypoint =
+        instance.get_typed_func::<(u32, u32, u32, u32, u32, u32), u32>(&mut store, "entrypoint")?;
+
+    let x1 = write_bytes(store.as_context_mut(), &memory, &alloc, b"Hello, ")?;
+    let y1 = write_bytes(store.as_context_mut(), &memory, &alloc, b"wasm!")?;
+
+    let Some((addr, size, name)) = find_perfmap_symbol("wasm_binary", "concat_str")? else {
         panic!("oh god");
     };
 
     println!("world: {name} addr=0x{addr:x} size=0x{size:x}");
 
-    let ebpf = attach_bro(addr).await.unwrap();
+    let mem_base = memory.data_ptr(&store) as u64;
+    tokio::task::spawn(async move {
+        let mut ebpf = attach_bro(addr, mem_base).await.unwrap();
+        read_events(&mut ebpf).await.unwrap();
+    });
 
     println!("attached");
 
@@ -120,7 +108,12 @@ async fn main() -> wasmtime::Result<()> {
     })
     .await
     .unwrap();
-    hello.call(&mut store, ())?;
+    println!("x1_ptr: {}", x1.ptr);
+    println!("x1_len: {}", x1.len);
+    println!("x1_ptr: {}", y1.ptr);
+    println!("y1_len: {}", y1.len);
+    println!("memory base: {:?}", memory.data_ptr(&store));
+    let _ = entrypoint.call(&mut store, (x1.ptr, x1.len, y1.ptr, y1.len, 40, 2))?;
 
     let ctrl_c = signal::ctrl_c();
     println!("Waiting for Ctrl-C...");
@@ -130,7 +123,27 @@ async fn main() -> wasmtime::Result<()> {
     Ok(())
 }
 
-async fn attach_bro(offset: u64) -> wasmtime::Result<aya::Ebpf> {
+fn write_bytes(
+    mut store: StoreContextMut<u32>,
+    memory: &Memory,
+    alloc: &TypedFunc<u32, u32>,
+    bytes: &[u8],
+) -> wasmtime::Result<Slice> {
+    let ptr = alloc.call(&mut store, bytes.len() as u32)?;
+    let data = memory.data_mut(&mut store);
+    let start = ptr as usize;
+    let end = start + bytes.len();
+    if end > data.len() {
+        panic!("too small")
+    }
+    data[start..end].copy_from_slice(bytes);
+    Ok(Slice {
+        ptr,
+        len: bytes.len() as u32,
+    })
+}
+
+async fn attach_bro(offset: u64, mem_base: u64) -> wasmtime::Result<aya::Ebpf> {
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
     let rlim = libc::rlimit {
@@ -146,10 +159,13 @@ async fn attach_bro(offset: u64) -> wasmtime::Result<aya::Ebpf> {
     // runtime. This approach is recommended for most real-world use cases. If you would
     // like to specify the eBPF program at runtime rather than at compile-time, you can
     // reach for `Bpf::load_file` instead.
-    let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(
-        "/home/aeryz/dev/ebpf/wasmvm-tracing-poc/out.bpf.o"
-    ))
-    .unwrap();
+    let mut ebpf = aya::EbpfLoader::new()
+        .override_global("MEM_BASE", &mem_base, true)
+        .load(aya::include_bytes_aligned!(concat!(
+            env!("OUT_DIR"),
+            "/wasm-tracer-ebpf"
+        )))
+        .unwrap();
     match aya_log::EbpfLogger::init(&mut ebpf) {
         Err(e) => {
             // This can happen if you remove all log statements from your eBPF program.
@@ -170,7 +186,7 @@ async fn attach_bro(offset: u64) -> wasmtime::Result<aya::Ebpf> {
     }
 
     let program: &mut PerfEvent = ebpf
-        .program_mut("uprobe_bashreadline")
+        .program_mut("trace_function_call")
         .unwrap()
         .try_into()
         .unwrap();
@@ -188,4 +204,40 @@ async fn attach_bro(offset: u64) -> wasmtime::Result<aya::Ebpf> {
         .unwrap();
 
     Ok(ebpf)
+}
+
+pub async fn read_events(bpf: &mut aya::Ebpf) -> anyhow::Result<()> {
+    let ring_buf = RingBuf::try_from(bpf.take_map("FunctionCalls").unwrap())?;
+    let mut buf = tokio::io::unix::AsyncFd::with_interest(ring_buf, tokio::io::Interest::READABLE)?;
+
+    tokio::task::spawn(async move {
+        loop {
+            let mut guard = buf.readable_mut().await.unwrap();
+            {
+                let item = guard.get_inner_mut().next().unwrap();
+                let ptr = item.as_ptr() as *const FunctionCallEvent;
+                let e = unsafe { *ptr };
+
+                let mut offset = 0;
+                loop {
+                    let str_len =
+                        u32::from_le_bytes(e.data[offset..offset + 4].try_into().expect("works"));
+                    if str_len == 0 {
+                        break;
+                    }
+                    offset += 4;
+                    let s = String::from_utf8_lossy(&e.data[offset..offset + str_len as usize]);
+                    offset += str_len as usize;
+                    println!("param: {s}");
+                }
+            }
+            guard.clear_ready();
+        }
+    });
+
+    println!("Waiting for Ctrl+C");
+    signal::ctrl_c().await?;
+    println!("Exiting..");
+
+    Ok(())
 }
