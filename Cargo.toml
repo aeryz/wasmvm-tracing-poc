@@ -5,6 +5,7 @@ members = [
   "wasm-runtime",
   "wasm-binary",
   "wasm-tracer-ebpf",
+  "wasm-tracer-abi",
 ]
 
 [workspace.package]
@@ -24,4 +25,4 @@ log = { version = "0.4.22", default-features = false }
 tokio = { version = "1.40.0", default-features = false }
 which = { version = "6.0.0", default-features = false }
 cargo_metadata = { version = "0.23.0", default-features = false }
-
+wasm-tracer-abi = { path = "wasm-tracer-abi", default-features = false }

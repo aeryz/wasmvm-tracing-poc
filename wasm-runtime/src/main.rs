@@ -1,7 +1,7 @@
 use std::{fs, process};
 
 use aya::{
-    maps::RingBuf,
+    maps::{HashMap, RingBuf},
     programs::{
         PerfEvent,
         perf_event::{BreakpointConfig, PerfEventConfig, PerfEventScope, SamplePolicy},
@@ -9,6 +9,7 @@ use aya::{
 };
 use log::{debug, warn};
 use tokio::signal;
+use wasm_tracer_abi::{FunctionMetadata, ParamType};
 use wasmtime::{
     AsContextMut, Config, Engine, Linker, Memory, Module, ProfilingStrategy, Store,
     StoreContextMut, TypedFunc,
@@ -18,7 +19,6 @@ use wasmtime::{
 #[derive(Debug, Copy, Clone)]
 pub struct FunctionCallEvent {
     pub addr: u64,
-    pub len: u32,
     pub data: [u8; 256],
 }
 
@@ -165,6 +165,24 @@ async fn attach_bro(offset: u64, mem_base: u64) -> wasmtime::Result<aya::Ebpf> {
             env!("OUT_DIR"),
             "/wasm-tracer-ebpf"
         )))
+        .unwrap();
+    let mut func_types: HashMap<_, u64, FunctionMetadata> =
+        HashMap::try_from(ebpf.map_mut("FunctionTypes").expect("map exists"))?;
+    func_types
+        .insert(
+            offset,
+            &FunctionMetadata {
+                param_types: [
+                    ParamType::PtrSlice,
+                    ParamType::PtrSlice,
+                    ParamType::Unspecified,
+                    ParamType::Unspecified,
+                    ParamType::Unspecified,
+                ],
+                param_count: 2,
+            },
+            0,
+        )
         .unwrap();
     match aya_log::EbpfLogger::init(&mut ebpf) {
         Err(e) => {

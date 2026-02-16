@@ -1671,10 +1671,18 @@ dependencies = [
  "libc",
  "log",
  "tokio",
+ "wasm-tracer-abi",
  "wasm-tracer-ebpf",
  "wasmtime",
  "wat",
  "which 6.0.3",
+]
+
+[[package]]
+name = "wasm-tracer-abi"
+version = "0.1.0"
+dependencies = [
+ "aya",
 ]
 
 [[package]]
@@ -1683,6 +1691,7 @@ version = "0.1.0"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
+ "wasm-tracer-abi",
  "which 6.0.3",
 ]
 

@@ -1,0 +1,12 @@
+[package]
+name = "wasm-tracer-abi"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+aya = { workspace = true, optional = true }
+
+[features]
+default = []
+userspace = [ "aya" ]

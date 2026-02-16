@@ -26,6 +26,7 @@ tokio = { workspace = true , features = [
   "signal",
 ]}
 which = { workspace = true }
+wasm-tracer-abi = { path = "../wasm-tracer-abi", features = [ "userspace" ] }
 
 [build-dependencies]
 anyhow = { workspace = true }
