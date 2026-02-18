@@ -1,5 +1,5 @@
 # Wasm Tracer
 
-This is a function tracer including the params and (possibly) the return values for JIT-compiled WASM's. The tracing is based on eBPF's and hardware interrupts so no change in the binary is needed to be able to trace the functions (assuming the function you want to trace is not inlined).
+This is a function tracer including the params and (possibly) the return values for JIT-compiled WASM's. The tracing is based on eBPF's and hardware interrupts so it can only trace up to 4 function calls per CPU.
 
-Right now, the whole repo is a proof of concept and more like a playground for me to play around with Rust eBPF. But it might turn into a cool project.
+Hardware breakpoints for this purpose is not useful for the real stuff because of how limited it is, but at least it's cool.
