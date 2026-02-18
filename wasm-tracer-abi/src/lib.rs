@@ -10,19 +10,54 @@ pub struct FunctionMetadata {
 }
 
 #[cfg(feature = "userspace")]
+impl FunctionMetadata {
+    pub const fn new(param_types: &[ParamType]) -> Result<Self, ()> {
+        let mut param_types_array = [ParamType::Unspecified; MAX_PARAM_COUNT];
+        if param_types.len() > MAX_PARAM_COUNT {
+            return Err(());
+        }
+
+        let mut i = 0;
+        while i < param_types.len() {
+            param_types_array[i] = param_types[i];
+            i += 1;
+        }
+
+        Ok(FunctionMetadata {
+            param_types: param_types_array,
+            param_count: param_types.len(),
+        })
+    }
+
+    pub const fn new_fixed<const N: usize>(param_types: [ParamType; N]) -> Self {
+        assert!(N <= MAX_PARAM_COUNT);
+
+        let Ok(ret) = Self::new(&param_types) else {
+            panic!("impossible")
+        };
+
+        ret
+    }
+}
+
+#[cfg(feature = "userspace")]
 unsafe impl aya::Pod for FunctionMetadata {}
 
 #[cfg_attr(feature = "userspace", derive(Debug, Copy, Clone))]
 #[repr(u8)]
 pub enum ParamType {
     Unspecified = 0,
-    I32 = 1,
-    I64 = 2,
-    F32 = 3,
-    F64 = 4,
+    I8,
+    I32,
+    I64,
+    U8,
+    U32,
+    U64,
+    F32,
+    F64,
 
-    /// This takes two fields in the wasm context: length and a pointer to the slice
-    PtrSlice = 5,
+    /// 1 word for length and 1 word for the pointer to the byte array
+    Bytes,
 }
 
 pub type ParamTypes = [ParamType; MAX_PARAM_COUNT];

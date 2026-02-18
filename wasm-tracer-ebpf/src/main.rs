@@ -84,21 +84,31 @@ fn parse_function_params_into_buf(
     }
     for i in 0..function_meta.param_count {
         match function_meta.param_types[i] {
-            wasm_tracer_abi::ParamType::I32 => {
+            wasm_tracer_abi::ParamType::I8 | wasm_tracer_abi::ParamType::U8 => {
                 let value = read_word_at_index(ctx, raw_param_offset)?;
-                let (head, new_tail) = unsafe { tail.split_at_mut_unchecked(size_of::<i32>()) };
+                let (head, new_tail) = unsafe { tail.split_at_mut_unchecked(size_of::<u8>()) };
                 head.iter_mut()
-                    .zip((value as i32).to_le_bytes().into_iter())
+                    .zip((value as u8).to_le_bytes().into_iter())
                     .for_each(|(x, y)| *x = y);
 
                 tail = new_tail;
                 raw_param_offset += 1;
             }
-            wasm_tracer_abi::ParamType::I64 => {
+            wasm_tracer_abi::ParamType::I32 | wasm_tracer_abi::ParamType::U32 => {
                 let value = read_word_at_index(ctx, raw_param_offset)?;
-                let (head, new_tail) = unsafe { tail.split_at_mut_unchecked(size_of::<i64>()) };
+                let (head, new_tail) = unsafe { tail.split_at_mut_unchecked(size_of::<u32>()) };
                 head.iter_mut()
-                    .zip((value as i64).to_le_bytes().into_iter())
+                    .zip((value as u32).to_le_bytes().into_iter())
+                    .for_each(|(x, y)| *x = y);
+
+                tail = new_tail;
+                raw_param_offset += 1;
+            }
+            wasm_tracer_abi::ParamType::I64 | wasm_tracer_abi::ParamType::U64 => {
+                let value = read_word_at_index(ctx, raw_param_offset)?;
+                let (head, new_tail) = unsafe { tail.split_at_mut_unchecked(size_of::<u64>()) };
+                head.iter_mut()
+                    .zip((value as u64).to_le_bytes().into_iter())
                     .for_each(|(x, y)| *x = y);
 
                 tail = new_tail;
@@ -106,7 +116,7 @@ fn parse_function_params_into_buf(
             }
             wasm_tracer_abi::ParamType::F32 => return Err(0),
             wasm_tracer_abi::ParamType::F64 => return Err(0),
-            wasm_tracer_abi::ParamType::PtrSlice => {
+            wasm_tracer_abi::ParamType::Bytes => {
                 let pointer = read_word_at_index(ctx, raw_param_offset)?;
                 let len = read_word_at_index(ctx, raw_param_offset + 1)?;
 
